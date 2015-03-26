@@ -1,9 +1,10 @@
 (ns onyx.log.commands.volunteer-for-task
-  (:require [clojure.core.async :refer [chan go >! <! close!]]
+  (:require [clojure.core.async :refer [chan go >! <! close! >!!]]
             [clojure.set :refer [union difference map-invert]]
             [clojure.data :refer [diff]]
             [com.stuartsierra.component :as component]
             [onyx.log.commands.common :as common]
+            [onyx.log.entry :refer [create-log-entry]]
             [onyx.peer.task-lifecycle :refer [task-lifecycle]]
             [onyx.extensions :as extensions]
             [taoensso.timbre]))
@@ -16,13 +17,6 @@
   (let [tasks (get-in replica [:tasks job])
         completed (get-in replica [:completions job])]
     (filter identity (second (diff completed tasks)))))
-
-(defmethod select-task :onyx.task-scheduler/greedy
-  [replica job peer-id]
-  (->> (get-in replica [:tasks job])
-       (incomplete-tasks replica job)
-       (common/active-tasks-only replica)
-       (first)))
 
 (defmethod select-task :onyx.task-scheduler/round-robin
   [replica job peer-id]
@@ -46,9 +40,10 @@
 
 (defmethod select-task :default
   [replica job peer-id]
-  (throw (ex-info (format "Task scheduler %s not recognized"
-                          (get-in replica [:task-schedulers job]))
-                  {:replica replica})))
+  (throw (ex-info 
+           (format "Task scheduler %s not recognized. Check that you have not supplied a job scheduler instead."
+                   (get-in replica [:task-schedulers job]))
+           {:replica replica})))
 
 (defmulti select-job
   (fn [{:keys [args]} replica]
@@ -60,31 +55,61 @@
        (common/alive-jobs replica)
        (common/jobs-with-available-tasks replica)))
 
+(defn exempt-from-acker? [replica job task args]
+  (or (some #{task} (get-in replica [:exempt-tasks job]))
+      (and (get-in replica [:acker-exclude-inputs job])
+           (some #{task} (get-in replica [:input-tasks job])))
+      (and (get-in replica [:acker-exclude-outputs job])
+           (some #{task} (get-in replica [:output-tasks job])))))
+
+(defn offer-acker [replica job task args]
+  (let [peers (count (apply concat (vals (get-in replica [:allocations job]))))
+        ackers (count (get-in replica [:ackers job]))
+        pct (get-in replica [:acker-percentage job])
+        current-pct (int (Math/ceil (* 10 (double (/ ackers peers)))))]
+    (if (and (< current-pct pct) (not (exempt-from-acker? replica job task args)))
+      (-> replica
+          (update-in [:ackers job] conj (:id args))
+          (update-in [:ackers job] vec))
+      replica)))
+
 (defmethod select-job :onyx.job-scheduler/greedy
   [{:keys [args]} replica]
-  (let [job (first (universally-executable-jobs replica))]
+  (let [job (first (universally-executable-jobs replica))
+        allocation (common/peer->allocated-job (:allocations replica) (:id args))]
     (if job
-      (let [task (select-task replica job (:id args))]
-        (-> replica
-            (common/remove-peers args)
-            (update-in [:allocations job task] conj (:id args))
-            (update-in [:allocations job task] vec)
-            (assoc-in [:peer-state (:id args)] :active)))
+      (if-let [task (select-task replica job (:id args))]
+        (if (or (not= task (:task allocation))
+                (not= job (:job allocation)))
+          (-> replica
+              (common/remove-peers args)
+              (update-in [:allocations job task] conj (:id args))
+              (update-in [:allocations job task] vec)
+              (assoc-in [:peer-state (:id args)] :warming-up)
+              (offer-acker job task args))
+          replica)
+        replica)
       replica)))
 
 (defmethod select-job :onyx.job-scheduler/round-robin
   [{:keys [args]} replica]
   (if-not (common/saturated-cluster? replica)
     (let [candidates (universally-executable-jobs replica)
+          allocation (common/peer->allocated-job (:allocations replica) (:id args))
           job (or (common/find-job-needing-peers replica candidates)
                   (common/round-robin-next-job replica candidates))]
       (if job
-        (let [task (select-task replica job (:id args))]
-          (-> replica
-              (common/remove-peers args)
-              (update-in [:allocations job task] conj (:id args))
-              (update-in [:allocations job task] vec)
-              (assoc-in [:peer-state (:id args)] :active)))
+        (if-let [task (select-task replica job (:id args))]
+          (if (or (not= task (:task allocation))
+                  (not= job (:job allocation)))
+            (-> replica
+                (common/remove-peers args)
+                (update-in [:allocations job task] conj (:id args))
+                (update-in [:allocations job task] vec)
+                (assoc-in [:peer-state (:id args)] :warming-up)
+                (offer-acker job task args))
+            replica)
+          replica)
         replica))
     replica))
 
@@ -92,6 +117,7 @@
   [{:keys [args]} replica]
   (let [candidates (universally-executable-jobs replica)
         balanced (common/percentage-balanced-workload replica)
+        allocation (common/peer->allocated-job (:allocations replica) (:id args))
         job
         (reduce
          (fn [_ job]
@@ -102,18 +128,25 @@
          nil
          candidates)]
     (if job
-      (let [task (select-task replica job (:id args))]
-        (-> replica
-            (common/remove-peers args)
-            (update-in [:allocations job task] conj (:id args))
-            (update-in [:allocations job task] vec)
-            (assoc-in [:peer-state (:id args)] :active)))
+      (if-let [task (select-task replica job (:id args))]
+        (if (or (not= task (:task allocation))
+                (not= job (:job allocation)))
+          (-> replica
+              (common/remove-peers args)
+              (update-in [:allocations job task] conj (:id args))
+              (update-in [:allocations job task] vec)
+              (assoc-in [:peer-state (:id args)] :warming-up)
+              (offer-acker job task args))
+          replica)
+        replica)
       replica)))
 
 (defmethod select-job :default
   [_ replica]
-  (throw (ex-info (format "Job scheduler %s not recognized" (:job-scheduler replica))
-                  {:replica replica})))
+  (throw (ex-info 
+           (format "Job scheduler %s not recognized. Check that you have not supplied a task scheduler instead." 
+                   (:job-scheduler replica))
+           {:replica replica})))
 
 (defmethod extensions/apply-log-entry :volunteer-for-task
   [entry replica]
@@ -125,33 +158,11 @@
     {:job (first (keys allocation))
      :task (first (keys (get allocation (first (keys allocation)))))}))
 
-(defmulti reallocate-from-task?
-  (fn [scheduler old new job state]
-    scheduler))
-
-(defmethod reallocate-from-task? :onyx.task-scheduler/percentage
-  [scheduler old new job state]
-  (let [allocation (common/peer->allocated-job (:allocations new) (:id state))]
-    (when (= (:job allocation) job)
-      (let [candidate-tasks (keys (get-in new [:allocations job]))
-            n-peers (count (apply concat (vals (get-in new [:allocations job]))))
-            balanced (common/percentage-balanced-taskload new job candidate-tasks n-peers)
-            required (:allocation (get balanced (:task allocation)))
-            actual (count (get-in new [:allocations job (:task allocation)]))]
-        (when (> actual required)
-          (let [n (- actual required)
-                peers-to-drop (common/drop-peers new job n)]
-            (when (some #{(:id state)} (into #{} peers-to-drop))
-              true)))))))
-
-(defmethod reallocate-from-task? :default
-  [scheduler old new job state]
-  false)
-
 (defmethod extensions/reactions :volunteer-for-task
   [{:keys [args]} old new diff peer-args]
   (let [scheduler (get-in new [:task-schedulers (:job diff)])]
-    (when (reallocate-from-task? scheduler old new (:job diff) peer-args)
+    (when (and (common/volunteer? old new peer-args (:job peer-args))
+               (common/reallocate-from-task? scheduler old new (:job diff) peer-args))
       [{:fn :volunteer-for-task :args {:id (:id peer-args)}}])))
 
 (defmethod extensions/fire-side-effects! :volunteer-for-task
@@ -163,7 +174,7 @@
           (component/stop (:lifecycle state)))
         (let [seal-ch (chan)
               new-state (assoc state :job (:job diff) :task (:task diff) :seal-ch seal-ch)
-              new-lifecycle (component/start ((:task-lifecycle-fn state) diff new-state))]
+              new-lifecycle (future (component/start ((:task-lifecycle-fn state) diff new-state)))]
           (assoc new-state :lifecycle new-lifecycle :seal-response-ch seal-ch)))
     state))
 

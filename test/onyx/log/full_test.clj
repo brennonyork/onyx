@@ -1,10 +1,8 @@
 (ns onyx.log.full-test
   (:require [clojure.core.async :refer [chan >!! <!! close!]]
             [com.stuartsierra.component :as component]
-            [onyx.system :as system]
             [onyx.log.entry :refer [create-log-entry]]
             [onyx.extensions :as extensions]
-            [onyx.log.util :as util]
             [onyx.api :as api]
             [midje.sweet :refer :all]
             [zookeeper :as zk]))
@@ -13,43 +11,15 @@
 
 (def config (read-string (slurp (clojure.java.io/resource "test-config.edn"))))
 
-(def scheduler :onyx.task-scheduler/greedy)
+(def env-config (assoc (:env-config config) :onyx/id onyx-id))
 
-(def env-config
-  {:hornetq/mode :udp
-   :hornetq/server? true
-   :hornetq.server/type :embedded
-   :hornetq.udp/cluster-name (:cluster-name (:hornetq config))
-   :hornetq.udp/group-address (:group-address (:hornetq config))
-   :hornetq.udp/group-port (:group-port (:hornetq config))
-   :hornetq.udp/refresh-timeout (:refresh-timeout (:hornetq config))
-   :hornetq.udp/discovery-timeout (:discovery-timeout (:hornetq config))
-   :hornetq.embedded/config (:configs (:hornetq config))
-   :zookeeper/address (:address (:zookeeper config))
-   :zookeeper/server? true
-   :zookeeper.server/port (:spawn-port (:zookeeper config))
-   :onyx.peer/task-scheduler scheduler   
-   :onyx/id onyx-id})
-
-(def peer-config
-  {:hornetq/mode :udp
-   :hornetq.udp/cluster-name (:cluster-name (:hornetq config))
-   :hornetq.udp/group-address (:group-address (:hornetq config))
-   :hornetq.udp/group-port (:group-port (:hornetq config))
-   :hornetq.udp/refresh-timeout (:refresh-timeout (:hornetq config))
-   :hornetq.udp/discovery-timeout (:discovery-timeout (:hornetq config))
-   :zookeeper/address (:address (:zookeeper config))
-   :onyx/id onyx-id
-   :onyx.peer/inbox-capacity 1000
-   :onyx.peer/outbox-capacity 1000
-   :onyx.peer/task-scheduler scheduler
-   :onyx.peer/state {:task-lifecycle-fn util/stub-task-lifecycle}})
+(def peer-config (assoc (:peer-config config) :onyx/id onyx-id))
 
 (def env (onyx.api/start-env env-config))
 
-(def n-peers 50)
+(def n-peers 20)
 
-(def v-peers (onyx.api/start-peers! n-peers peer-config system/onyx-fake-peer))
+(def v-peers (onyx.api/start-peers n-peers peer-config))
 
 (def ch (chan n-peers))
 

@@ -1,3 +1,27 @@
+#### 0.6.0
+
+- Dropped feature: support for `:sequential` tasks
+- Dropped feature: support for `onyx.task-scheduler/greedy`
+- Dropped feature: support for HornetQ messaging
+- New messaging transport: http-kit websockets
+- New messaging transport: Netty websockets
+- New messaging transport: Aeron
+- New feature: Percentage-based, elastically scalable acknowledgement configuration
+- New feature: Input, output, and specific task name exemption from acting as an acker node
+- Added metadata to all public API functions indicating which Onyx version they were added in.
+- `onyx.api/start-peers!` API renamed to `onyx.api/start-peers`
+- `onyx.api/shutdown-peers` is now idempotent
+- The last task in a workflow no longer needs to be an `output` task.
+
+#### 0.5.3
+
+- New feature: Flow Conditions. Flow Conditions let you manage predicates that route segments across tasks in your workflow.
+- Fixed extraneous ZooKeeper error messages.
+
+#### 0.5.2
+
+- Development environment doesn't required that the job scheduler be known ahead of time. It's now discovered dynamically.
+
 #### 0.5.1
 
 - Adds ctime to log entries. Useful for things like the dashboard and other log subscribers.

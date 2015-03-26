@@ -10,6 +10,7 @@ We'll take a quick overview of some terms you'll see in the rest of this user gu
   - [Task](#task)
   - [Workflow](#workflow)
   - [Catalog](#catalog)
+  - [Flow Conditions](#flow-conditions)
   - [Segment](#segment)
   - [Function](#function)
   - [Plugin](#plugin)
@@ -116,7 +117,6 @@ Example:
  :onyx/ident :hornetq/read-segments
  :onyx/type :input
  :onyx/medium :hornetq
- :onyx/consumption :concurrent
  :hornetq/queue-name in-queue
  :hornetq/host hornetq-host
  :hornetq/port hornetq-port
@@ -126,7 +126,6 @@ Example:
 {:onyx/name :inc
  :onyx/fn :my.namespace/my-function-name
  :onyx/type :function
- :onyx/consumption :concurrent
  :onyx/batch-size batch-size
  :onyx/doc "A function to increment integers"}
 
@@ -134,12 +133,24 @@ Example:
  :onyx/ident :hornetq/write-segments
  :onyx/type :output
  :onyx/medium :hornetq
- :onyx/consumption :concurrent
  :hornetq/queue-name out-queue
  :hornetq/host hornetq-host
  :hornetq/port hornetq-port
  :onyx/batch-size batch-size
  :onyx/doc "A HornetQ output stream"}]
+```
+
+#### Flow Conditions
+
+In contrast to a workflow, flow conditions specify on a segment-by-segment basis which direction data should flow determined by predicate functions. This is helpful for conditionally processing a segment based off of its content.
+
+Example:
+
+```clojure
+[{:flow/from :input-stream
+  :flow/to [:process-adults]
+  :flow/predicate :my.ns/adult?
+  :flow/doc "Emits segment if this segment is an adult."}
 ```
 
 #### Segment

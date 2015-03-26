@@ -11,39 +11,12 @@
 
 (def config (read-string (slurp (clojure.java.io/resource "test-config.edn"))))
 
-(def scheduler :onyx.job-scheduler/round-robin)
-
-(def env-config
-  {:hornetq/mode :udp
-   :hornetq/server? true
-   :hornetq.server/type :embedded
-   :hornetq.udp/cluster-name (:cluster-name (:hornetq config))
-   :hornetq.udp/group-address (:group-address (:hornetq config))
-   :hornetq.udp/group-port (:group-port (:hornetq config))
-   :hornetq.udp/refresh-timeout (:refresh-timeout (:hornetq config))
-   :hornetq.udp/discovery-timeout (:discovery-timeout (:hornetq config))
-   :hornetq.embedded/config (:configs (:hornetq config))
-   :zookeeper/address (:address (:zookeeper config))
-   :zookeeper/server? true
-   :zookeeper.server/port (:spawn-port (:zookeeper config))
-   :onyx/id id
-   :onyx.peer/job-scheduler scheduler})
+(def env-config (assoc (:env-config config) :onyx/id id))
 
 (def peer-config
-  {:hornetq/mode :udp
-   :hornetq.udp/cluster-name (:cluster-name (:hornetq config))
-   :hornetq.udp/group-address (:group-address (:hornetq config))
-   :hornetq.udp/group-port (:group-port (:hornetq config))
-   :hornetq.udp/refresh-timeout (:refresh-timeout (:hornetq config))
-   :hornetq.udp/discovery-timeout (:discovery-timeout (:hornetq config))
-   :zookeeper/address (:address (:zookeeper config))
-   :onyx/id id
-   :onyx.peer/inbox-capacity (:inbox-capacity (:peer config))
-   :onyx.peer/outbox-capacity (:outbox-capacity (:peer config))
-   :onyx.peer/job-scheduler scheduler})
-
-(def hq-config {"host" (:host (:non-clustered (:hornetq config)))
-                "port" (:port (:non-clustered (:hornetq config)))})
+  (assoc (:peer-config config)
+    :onyx/id id
+    :onyx.peer/job-scheduler :onyx.job-scheduler/round-robin))
 
 (def env (onyx.api/start-env env-config))
 
@@ -65,21 +38,18 @@
   [{:onyx/name :in-bootstrapped
     :onyx/type :input
     :onyx/medium :onyx-memory-test-plugin
-    :onyx/consumption :concurrent
     :onyx/bootstrap? true
     :onyx/batch-size 2}
 
    {:onyx/name :inc
     :onyx/fn :onyx.peer.bootstrap-test/my-inc
     :onyx/type :function
-    :onyx/consumption :concurrent
     :onyx/batch-size 5}
 
    {:onyx/name :out
     :onyx/ident :hornetq/write-segments
     :onyx/type :output
     :onyx/medium :hornetq
-    :onyx/consumption :concurrent
     :hornetq/queue-name out-queue
     :hornetq/host (:host (:non-clustered (:hornetq config)))
     :hornetq/port (:port (:non-clustered (:hornetq config)))
